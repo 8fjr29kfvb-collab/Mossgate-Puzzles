@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta
+      name="description"
+      content="Mossgate Puzzles — a daily sudoku and a daily nonogram. Free, no account."
+    />
+    <meta name="theme-color" content="#f7f4e9" />
+    <title>Daily puzzles · Mossgate Puzzles</title>
+    <link rel="icon" href="/assets/gate-mark.svg" type="image/svg+xml" />
+    <!--
+      Cookie-free counter hook (GoatCounter). Off.
+      The switch lives in src/counter.ts (visitCounter.enabled).
+      Do not add a tracking script here while that flag is false.
+    -->
+    <style>
+      body {
+        margin: 0;
+        background: #f7f4e9;
+        color: #233f32;
+        font: 18px/1.45 Arial, sans-serif;
+      }
+      .noscript {
+        max-width: 36rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+      }
+      .skip {
+        position: absolute;
+        left: 8px;
+        top: -40px;
+      }
+      .skip:focus {
+        top: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to puzzle</a>
+    <noscript>
+      <p class="noscript">
+        Mossgate Puzzles builds each day’s sudoku and nonogram in your browser.
+        Turn on JavaScript to play. Nothing is sent to a server.
+      </p>
+    </noscript>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
