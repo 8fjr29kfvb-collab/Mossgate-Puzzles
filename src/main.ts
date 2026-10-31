@@ -3,6 +3,7 @@ import '@fontsource/atkinson-hyperlegible/latin-700.css';
 import './style.css';
 import { installVisitCounter } from './counter.ts';
 import { formatDuration, formatLongDate, tokyoDateString } from './date.ts';
+import { describeNonogramCell, nonogramBoardHtml, nonogramButtonClass } from './nonogram-board.ts';
 import { lineClues, nonogramForDate, type NonogramPuzzle } from './nonogram.ts';
 import { nonogramShareText, sudokuShareText } from './share.ts';
 import { recordCompletion, streakLabel, visibleStreak, type StreakRecord } from './streak.ts';
@@ -423,32 +424,13 @@ function refreshSudokuButtons(): void {
 
 function describeNonogram(index: number): string {
   const size = state.nonogramPuzzle?.size ?? 10;
-  const row = Math.floor(index / size) + 1;
-  const col = (index % size) + 1;
   const cell = state.nonogram.cells[index] ?? 0;
-  let detail = cell === 1 ? 'filled' : cell === 2 ? 'marked empty' : 'blank';
-  if (isNonogramMistake(index)) detail += ', incorrect';
-  return `Row ${row}, column ${col}, ${detail}`;
+  return describeNonogramCell(size, index, cell, isNonogramMistake(index));
 }
 
 function nonogramClass(index: number): string {
-  const classes = ['cell'];
-  const cell = state.nonogram.cells[index] ?? 0;
-  if (cell === 1) classes.push('filled');
-  if (cell === 2) classes.push('cross');
-  if (index === state.nonogramSelected) classes.push('selected');
-  else if (nonogramPeer(index)) classes.push('peer');
-  if (isNonogramMistake(index)) classes.push('mistake');
-  return classes.join(' ');
-}
-
-function nonogramPeer(index: number): boolean {
   const size = state.nonogramPuzzle?.size ?? 10;
-  const row = Math.floor(index / size);
-  const col = index % size;
-  const selectedRow = Math.floor(state.nonogramSelected / size);
-  const selectedCol = state.nonogramSelected % size;
-  return row === selectedRow || col === selectedCol;
+  return nonogramButtonClass(size, index, state.nonogram.cells[index] ?? 0, state.nonogramSelected, isNonogramMistake(index));
 }
 
 function lineFilled(row: number | null, col: number | null): boolean[] {
@@ -491,34 +473,14 @@ function renderNonogramBoard(): void {
     wrap.innerHTML = `<p class="error" role="alert">Today’s nonogram could not be built. <button type="button" id="reload">Reload</button></p>`;
     return;
   }
-  const size = puzzle.size;
-  const colHeads = puzzle.colClues
-    .map((clues, c) => {
-      const done = sameClues(lineClues(lineFilled(null, c)), clues);
-      const spans = clues.map((clue) => `<span>${clue}</span>`).join('');
-      return `<th scope="col" class="clue col-clue${done ? ' done' : ''}" data-clue="c-${c}" aria-label="Column ${c + 1} clue ${clues.join(' ')}${done ? ', satisfied' : ''}">${spans}</th>`;
-    })
-    .join('');
-  const body = puzzle.rowClues
-    .map((clues, r) => {
-      const done = sameClues(lineClues(lineFilled(r, null)), clues);
-      const spans = clues.map((clue) => `<span>${clue}</span>`).join('');
-      const cells = Array.from({ length: size }, (_, c) => {
-        const index = r * size + c;
-        return `<td><button type="button" data-i="${index}" aria-label="${describeNonogram(index)}" aria-invalid="${isNonogramMistake(index)}" aria-selected="${index === state.nonogramSelected}" tabindex="${index === state.nonogramSelected ? 0 : -1}" class="${nonogramClass(index)}">${state.nonogram.cells[index] === 2 ? '×' : ''}</button></td>`;
-      }).join('');
-      return `<tr><th scope="row" class="clue row-clue${done ? ' done' : ''}" data-clue="r-${r}" aria-label="Row ${r + 1} clue ${clues.join(' ')}${done ? ', satisfied' : ''}">${spans}</th>${cells}</tr>`;
-    })
-    .join('');
-  wrap.innerHTML = `
-    <div class="board-scroll">
-      <table class="nonogram">
-        <caption class="sr-only">Nonogram grid. Numbers above each column and beside each row are the clues.</caption>
-        <thead><tr><th class="corner"><span class="sr-only">Clues</span></th>${colHeads}</tr></thead>
-        <tbody>${body}</tbody>
-      </table>
-    </div>
-  `;
+  wrap.innerHTML = nonogramBoardHtml({
+    size: puzzle.size,
+    rowClues: puzzle.rowClues,
+    colClues: puzzle.colClues,
+    cells: state.nonogram.cells,
+    selected: state.nonogramSelected,
+    mistakeAt: isNonogramMistake,
+  });
 }
 
 function renderBoard(): void {
