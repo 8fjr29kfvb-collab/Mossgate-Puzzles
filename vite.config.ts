@@ -1,9 +1,9 @@
 import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vitest/config';
 
-// Project-site base for https://8fjr29kfvb-collab.github.io/mossgate-puzzles/
+// Project-site base for https://8fjr29kfvb-collab.github.io/Mossgate-Puzzles/
 // Dev stays at / so local links are / and /play/.
-const pagesBase = '/mossgate-puzzles/';
+const pagesBase = '/Mossgate-Puzzles/';
 
 export default defineConfig(({ command }) => ({
   base: command === 'build' ? pagesBase : '/',

@@ -27,7 +27,7 @@ describe('Pages workflow', () => {
     expect(workflow).toContain('actions/deploy-pages@v4');
     expect(workflow).toContain('actions/upload-pages-artifact@v3');
     const config = readFileSync(new URL('../vite.config.ts', import.meta.url), 'utf8');
-    expect(config).toContain("'/mossgate-puzzles/'");
+    expect(config).toContain("'/Mossgate-Puzzles/'");
     expect(config).toContain('play/index.html');
   });
 });

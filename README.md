@@ -16,13 +16,13 @@ Open [http://127.0.0.1:41773/](http://127.0.0.1:41773/) for the landing page and
 
 `npm test` checks the solvers, the Tokyo date change, streaks, share text, the landing copy, and that every generated puzzle has exactly one solution.
 
-`npm run build` writes the static site to `dist/`. The production build uses the project-site base `/mossgate-puzzles/`. `npm run preview` serves that folder.
+`npm run build` writes the static site to `dist/`. The production build uses the project-site base `/Mossgate-Puzzles/`. `npm run preview` serves that folder.
 
 ## GitHub Pages
 
-The site is meant for [https://8fjr29kfvb-collab.github.io/mossgate-puzzles/](https://8fjr29kfvb-collab.github.io/mossgate-puzzles/).
+The site is meant for [https://8fjr29kfvb-collab.github.io/Mossgate-Puzzles/](https://8fjr29kfvb-collab.github.io/Mossgate-Puzzles/).
 
-`.github/workflows/pages.yml` builds on pushes to `main` and deploys the `dist/` folder with `actions/upload-pages-artifact` and `actions/deploy-pages`. Asset paths use the base `/mossgate-puzzles/`, so the landing page, `/play/`, the fox picture, and the gate mark resolve on that project site.
+`.github/workflows/pages.yml` builds on pushes to `main` and deploys the `dist/` folder with `actions/upload-pages-artifact` and `actions/deploy-pages`. Asset paths use the base `/Mossgate-Puzzles/`, so the landing page, `/play/`, the fox picture, and the gate mark resolve on that project site.
 
 Turning Pages on is a repository setting. This project does not change that setting. After Pages is set to GitHub Actions, the workflow can publish. Until then, the deploy job has nowhere to go.
 

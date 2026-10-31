@@ -70,6 +70,6 @@ describe('presentation', () => {
     expect(readme).toContain('npm test');
     expect(readme).toContain('41773');
     expect(readme).toContain('© Mossgate Puzzles');
-    expect(readme).toContain('/mossgate-puzzles/');
+    expect(readme).toContain('/Mossgate-Puzzles/');
   });
 });
