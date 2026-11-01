@@ -15,9 +15,17 @@ export type NonogramProgress = {
   solved: boolean;
 };
 
+export type WordSearchProgress = {
+  found: string[];
+  elapsed: number;
+  userPaused: boolean;
+  solved: boolean;
+};
+
 export type DayProgress = {
   sudoku: SudokuProgress | null;
   nonogram: NonogramProgress | null;
+  wordsearch?: WordSearchProgress | null;
 };
 
 export type SaveData = {
@@ -26,6 +34,7 @@ export type SaveData = {
   checkMistakes: boolean;
   sudokuStreak: StreakRecord;
   nonogramStreak: StreakRecord;
+  wordsearchStreak: StreakRecord;
   days: Record<string, DayProgress>;
 };
 
@@ -65,12 +74,17 @@ export function defaultSave(): SaveData {
     checkMistakes: false,
     sudokuStreak: emptyStreak(),
     nonogramStreak: emptyStreak(),
+    wordsearchStreak: emptyStreak(),
     days: {},
   };
 }
 
+export function emptyWordSearchProgress(): WordSearchProgress {
+  return { found: [], elapsed: 0, userPaused: false, solved: false };
+}
+
 export function isDaySolved(day: DayProgress | undefined): boolean {
-  return Boolean(day?.sudoku?.solved && day.nonogram?.solved);
+  return Boolean(day?.sudoku?.solved && day.nonogram?.solved && day.wordsearch?.solved);
 }
 
 export function trimDays(
@@ -160,14 +174,30 @@ type LegacySave = {
   progressDate?: unknown;
   sudoku?: unknown;
   nonogram?: unknown;
+  wordsearchStreak?: unknown;
   days?: unknown;
 };
 
-function dayFromParts(sudokuRaw: unknown, nonogramRaw: unknown): DayProgress | null {
+function wordsearchProgress(value: unknown): WordSearchProgress | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Partial<WordSearchProgress>;
+  if (!Array.isArray(raw.found) || raw.found.length > 80) return null;
+  const found: string[] = [];
+  for (const item of raw.found) {
+    if (typeof item !== 'string' || !/^[A-Z]{4,12}$/.test(item)) return null;
+    found.push(item);
+  }
+  if (typeof raw.userPaused !== 'boolean' || typeof raw.solved !== 'boolean') return null;
+  if (!isInt(raw.elapsed, 0, 86_400_000 * 7)) return null;
+  return { found, elapsed: raw.elapsed, userPaused: raw.userPaused, solved: raw.solved };
+}
+
+function dayFromParts(sudokuRaw: unknown, nonogramRaw: unknown, wordsearchRaw: unknown): DayProgress | null {
   const sudoku = sudokuRaw == null ? null : sudokuProgress(sudokuRaw);
   const nonogram = nonogramRaw == null ? null : nonogramProgress(nonogramRaw);
-  if (!sudoku && !nonogram) return null;
-  return { sudoku, nonogram };
+  const wordsearch = wordsearchRaw == null ? null : wordsearchProgress(wordsearchRaw);
+  if (!sudoku && !nonogram && !wordsearch) return null;
+  return { sudoku, nonogram, wordsearch };
 }
 
 function daysMap(value: unknown): Record<string, DayProgress> {
@@ -175,8 +205,8 @@ function daysMap(value: unknown): Record<string, DayProgress> {
   const out: Record<string, DayProgress> = {};
   for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || !raw || typeof raw !== 'object') continue;
-    const entry = raw as { sudoku?: unknown; nonogram?: unknown };
-    const day = dayFromParts(entry.sudoku, entry.nonogram);
+    const entry = raw as { sudoku?: unknown; nonogram?: unknown; wordsearch?: unknown };
+    const day = dayFromParts(entry.sudoku, entry.nonogram, entry.wordsearch);
     if (day) out[key] = day;
   }
   return trimDays(out);
@@ -189,14 +219,15 @@ export function parseSave(raw: string | null): SaveData {
     if (data.version !== 1 && data.version !== 2) return defaultSave();
     const sudokuStreak = streak(data.sudokuStreak);
     const nonogramStreak = streak(data.nonogramStreak);
-    if (!sudokuStreak || !nonogramStreak) return defaultSave();
+    const wordsearchStreak = data.wordsearchStreak == null ? emptyStreak() : streak(data.wordsearchStreak);
+    if (!sudokuStreak || !nonogramStreak || !wordsearchStreak) return defaultSave();
     let days: Record<string, DayProgress> = {};
     if (data.version === 1) {
       const progressDate =
         typeof data.progressDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(data.progressDate)
           ? data.progressDate
           : null;
-      const day = dayFromParts(data.sudoku, data.nonogram);
+      const day = dayFromParts(data.sudoku, data.nonogram, null);
       if (progressDate && day) days[progressDate] = day;
     } else {
       days = daysMap(data.days);
@@ -207,6 +238,7 @@ export function parseSave(raw: string | null): SaveData {
       checkMistakes: data.checkMistakes === true,
       sudokuStreak,
       nonogramStreak,
+      wordsearchStreak,
       days: trimDays(days),
     };
   } catch {

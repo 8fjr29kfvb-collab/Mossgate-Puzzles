@@ -20,6 +20,12 @@ export function sudokuShareText(
   return `Mossgate Puzzles · Sudoku\n${isoDate} · ${formatDuration(elapsedMs)}\n\n${rows.join('\n')}`;
 }
 
+/** The words that were hidden in the grid, one per line. */
+export function wordsearchShareText(isoDate: string, elapsedMs: number, words: readonly string[]): string {
+  const list = words.slice().sort().join('\n');
+  return `Mossgate Puzzles · Word search\n${isoDate} · ${formatDuration(elapsedMs)}\n\n${list}`;
+}
+
 /** Filled cells are black. Empty cells are white. This is the finished picture. */
 export function nonogramShareText(
   isoDate: string,

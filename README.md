@@ -1,8 +1,8 @@
 # Mossgate Puzzles
 
-A woodland front page and a daily sudoku and nonogram. The site is static: the landing page, plus puzzles built in the browser. There is no account, no server, and no puzzle API.
+A woodland front page and a daily sudoku, nonogram, and word search. The site is static: the landing page, plus puzzles built in the browser. There is no account, no server, and no puzzle API.
 
-The front page is the gate. Today’s sudoku and nonogram are one click in, at `/play/`. Each puzzle has one solution. Progress and streaks stay in `localStorage` on the device. Earlier days are at `/play/?date=YYYY-MM-DD`, from the launch date 31 October 2026 through today in Tokyo.
+The front page is the gate. Today’s sudoku, nonogram, and word search are one click in, at `/play/`. Each puzzle has one solution. Progress and streaks stay in `localStorage` on the device. Earlier days are at `/play/?date=YYYY-MM-DD`, from the launch date 31 October 2026 through today in Tokyo.
 
 ## Run locally
 
@@ -46,6 +46,7 @@ Pictures are a checked catalog of at least 60 hand-built 10×10 grids in `src/pa
 
 - Sudoku: tap a cell, then a digit. Notes are pencil marks. Check mistakes compares an entry with the solution and does not fill in the right digit.
 - Nonogram: tap or drag to fill. Cross marks a cell to leave empty. A struck-through clue means that line matches its numbers.
+- Word search: tap the first letter, then the last. The word list sits under the grid.
 - The timer starts on the first edit, pauses when you leave the tab, and can be paused by hand.
 - Large print switches the play page to Atkinson Hyperlegible (self-hosted, no font request to another site) at 18px and up, with larger digits.
 - Arrow keys, digits, and the shortcuts in “How to play” work from the grid.
@@ -53,7 +54,11 @@ Pictures are a checked catalog of at least 60 hand-built 10×10 grids in `src/pa
 
 Streaks are per puzzle. Finishing the same Tokyo date twice does not add a day. Missing a day resets that streak. The count still shows on the following morning so it is clear what continuing would keep. Solving an earlier date does not change the streak. Share text names the puzzle’s date.
 
-Previous day and Next day step through the archive. The Archive list runs from today back to launch and marks a day with a check when both puzzles are solved. The list is only on this device.
+Previous day and Next day step through the archive. The Archive list runs from today back to launch and marks a day with a check when the sudoku, nonogram, and word search are all solved. The list is only on this device.
+
+### Word search
+
+The seed is FNV-1a of `mossgate-words-v1:YYYY-MM-DD`, expanded with mulberry32. Weekdays are a 20×20 grid with 22 words. Sundays in Tokyo are a 25×25 grid with 32 words. The size follows the date only, so a phone and a desktop get the same puzzle. A narrow screen scrolls the grid, including in large print. Words read across, down, or diagonally down-right, never backwards. If the random letters would spell a blocklisted word, or a placed word would appear twice, the generator retries with `mossgate-words-v1:YYYY-MM-DD#n`. Themes and word lists are hand-written in `src/words.ts`.
 
 The save key is `mossgate-puzzles-v1`. The document version is 2: a map of date to that day’s progress, capped at 60 dates. A version 1 save, which stored only the latest day, is read into that day’s slot so it is not dropped.
 

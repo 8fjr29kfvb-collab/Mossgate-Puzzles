@@ -5,11 +5,12 @@ import { installVisitCounter } from './counter.ts';
 import { addDays, archiveDates, clampPuzzleDate, formatDuration, formatLongDate, LAUNCH_DATE, tokyoDateString } from './date.ts';
 import { describeNonogramCell, nonogramBoardHtml, nonogramButtonClass } from './nonogram-board.ts';
 import { lineClues, nonogramForDate, type NonogramPuzzle } from './nonogram.ts';
-import { nonogramShareText, sudokuShareText } from './share.ts';
+import { nonogramShareText, sudokuShareText, wordsearchShareText } from './share.ts';
 import { recordIfToday, streakLabel, visibleStreak, type StreakRecord } from './streak.ts';
 import {
   emptyNonogramProgress,
   emptySudokuProgress,
+  emptyWordSearchProgress,
   isDaySolved,
   loadSave,
   trimDays,
@@ -17,10 +18,13 @@ import {
   type DayProgress,
   type NonogramProgress,
   type SudokuProgress,
+  type WordSearchProgress,
 } from './storage.ts';
+import { wordsearchBoardHtml } from './wordsearch-board.ts';
+import { selectionIndexes, wordsearchForDate, type WordSearchPuzzle } from './wordsearch.ts';
 import { clueCount, sudokuBand, sudokuForDate, type SudokuPuzzle } from './sudoku.ts';
 
-type Mode = 'sudoku' | 'nonogram';
+type Mode = 'sudoku' | 'nonogram' | 'wordsearch';
 type Tool = 'fill' | 'cross' | 'erase';
 type CellValue = 0 | 1 | 2;
 
@@ -35,6 +39,15 @@ const SUDOKU_HELP = `
     <li>Tap a cell, then tap a number. Arrow keys move.</li>
     <li><kbd>1</kbd> to <kbd>9</kbd> enter a digit. <kbd>N</kbd> toggles notes. <kbd>Delete</kbd> clears the cell.</li>
     <li><kbd>U</kbd> undoes. Check mistakes marks an entry that does not match the solution.</li>
+  </ul>
+`;
+
+const WORDSEARCH_HELP = `
+  <p>Find every word in the list. Words read across, down, or diagonally down to the right. They are never written backwards.</p>
+  <ul>
+    <li>Tap the first letter, then the last letter. On a phone, scroll the grid if it does not fit.</li>
+    <li>Arrow keys move. <kbd>Enter</kbd> sets the first letter, then the last. <kbd>Escape</kbd> clears the start.</li>
+    <li>Sunday in Tokyo is a larger grid with more words. The grid for a date is the same on every screen.</li>
   </ul>
 `;
 
@@ -56,23 +69,31 @@ const state = {
   checkMistakes: false,
   sudokuStreak: { count: 0, lastDate: null } as StreakRecord,
   nonogramStreak: { count: 0, lastDate: null } as StreakRecord,
+  wordsearchStreak: { count: 0, lastDate: null } as StreakRecord,
   sudokuPuzzle: null as SudokuPuzzle | null,
   nonogramPuzzle: null as NonogramPuzzle | null,
+  wordsearchPuzzle: null as WordSearchPuzzle | null,
   sudoku: emptySudokuProgress(),
   nonogram: emptyNonogramProgress(),
+  wordsearch: emptyWordSearchProgress(),
   sudokuSelected: 0,
   nonogramSelected: 0,
+  wordsearchSelected: 0,
+  wordsearchAnchor: null as number | null,
   notesMode: false,
   tool: 'fill' as Tool,
   sudokuUndo: [] as SudokuUndo[],
   nonogramUndo: [] as NonogramChange[][],
+  wordsearchUndo: [] as string[],
   sudokuError: false,
   nonogramError: false,
+  wordsearchError: false,
 };
 
 const runtime: Record<Mode, Runtime> = {
   sudoku: { runningSince: null },
   nonogram: { runningSince: null },
+  wordsearch: { runningSince: null },
 };
 
 let drag: { id: number; value: CellValue; changes: NonogramChange[]; seen: Set<number> } | null = null;
@@ -83,8 +104,10 @@ function must<T extends HTMLElement>(id: string): T {
   return el as T;
 }
 
-function progressOf(mode: Mode): SudokuProgress | NonogramProgress {
-  return mode === 'sudoku' ? state.sudoku : state.nonogram;
+function progressOf(mode: Mode): SudokuProgress | NonogramProgress | WordSearchProgress {
+  if (mode === 'sudoku') return state.sudoku;
+  if (mode === 'nonogram') return state.nonogram;
+  return state.wordsearch;
 }
 
 function hasWork(mode: Mode): boolean {
@@ -96,7 +119,10 @@ function hasWork(mode: Mode): boolean {
       state.sudoku.notes.some(Boolean)
     );
   }
-  return state.nonogram.solved || state.nonogram.elapsed > 0 || state.nonogram.cells.some(Boolean);
+  if (mode === 'nonogram') {
+    return state.nonogram.solved || state.nonogram.elapsed > 0 || state.nonogram.cells.some(Boolean);
+  }
+  return state.wordsearch.solved || state.wordsearch.elapsed > 0 || state.wordsearch.found.length > 0;
 }
 
 function shouldRun(mode: Mode): boolean {
@@ -129,7 +155,7 @@ function shownElapsed(mode: Mode): number {
 }
 
 function freezeClocks(): void {
-  for (const mode of ['sudoku', 'nonogram'] as const) {
+  for (const mode of ['sudoku', 'nonogram', 'wordsearch'] as const) {
     const rt = runtime[mode];
     if (rt.runningSince != null) {
       progressOf(mode).elapsed += Date.now() - rt.runningSince;
@@ -183,15 +209,20 @@ function isNonogramMistake(index: number): boolean {
 }
 
 function selectedIndex(): number {
-  return state.mode === 'sudoku' ? state.sudokuSelected : state.nonogramSelected;
+  if (state.mode === 'sudoku') return state.sudokuSelected;
+  if (state.mode === 'nonogram') return state.nonogramSelected;
+  return state.wordsearchSelected;
 }
 
 function shareText(): string {
   if (state.mode === 'sudoku' && state.sudokuPuzzle) {
     return sudokuShareText(state.puzzleDate, shownElapsed('sudoku'), state.sudokuPuzzle.givens);
   }
-  if (state.nonogramPuzzle) {
+  if (state.mode === 'nonogram' && state.nonogramPuzzle) {
     return nonogramShareText(state.puzzleDate, shownElapsed('nonogram'), state.nonogramPuzzle.solution);
+  }
+  if (state.wordsearchPuzzle) {
+    return wordsearchShareText(state.puzzleDate, shownElapsed('wordsearch'), state.wordsearchPuzzle.words);
   }
   return '';
 }
@@ -203,11 +234,13 @@ function dayHasProgress(day: DayProgress): boolean {
     sudoku && (sudoku.solved || sudoku.elapsed > 0 || sudoku.values.some(Boolean) || sudoku.notes.some(Boolean)),
   );
   const nonogramWork = Boolean(nonogram && (nonogram.solved || nonogram.elapsed > 0 || nonogram.cells.some(Boolean)));
-  return sudokuWork || nonogramWork;
+  const wordsearch = day.wordsearch;
+  const wordsearchWork = Boolean(wordsearch && (wordsearch.solved || wordsearch.elapsed > 0 || wordsearch.found.length > 0));
+  return sudokuWork || nonogramWork || wordsearchWork;
 }
 
 function persist(): void {
-  const day: DayProgress = { sudoku: state.sudoku, nonogram: state.nonogram };
+  const day: DayProgress = { sudoku: state.sudoku, nonogram: state.nonogram, wordsearch: state.wordsearch };
   if (state.puzzleDate && dayHasProgress(day)) state.days[state.puzzleDate] = day;
   else if (state.puzzleDate) delete state.days[state.puzzleDate];
   state.days = trimDays(state.days, 60, state.puzzleDate);
@@ -217,6 +250,7 @@ function persist(): void {
     checkMistakes: state.checkMistakes,
     sudokuStreak: state.sudokuStreak,
     nonogramStreak: state.nonogramStreak,
+    wordsearchStreak: state.wordsearchStreak,
     days: state.days,
   });
 }
@@ -243,28 +277,38 @@ function renderClock(): void {
 function renderChrome(): void {
   const sudokuTab = must<HTMLButtonElement>('tab-sudoku');
   const nonogramTab = must<HTMLButtonElement>('tab-nonogram');
+  const wordsearchTab = must<HTMLButtonElement>('tab-wordsearch');
   const sudokuOn = state.mode === 'sudoku';
+  const nonogramOn = state.mode === 'nonogram';
+  const wordsearchOn = state.mode === 'wordsearch';
   sudokuTab.setAttribute('aria-selected', String(sudokuOn));
-  nonogramTab.setAttribute('aria-selected', String(!sudokuOn));
+  nonogramTab.setAttribute('aria-selected', String(nonogramOn));
+  wordsearchTab.setAttribute('aria-selected', String(wordsearchOn));
   sudokuTab.tabIndex = sudokuOn ? 0 : -1;
-  nonogramTab.tabIndex = sudokuOn ? -1 : 0;
+  nonogramTab.tabIndex = nonogramOn ? 0 : -1;
+  wordsearchTab.tabIndex = wordsearchOn ? 0 : -1;
   must('sudoku-done').hidden = !state.sudoku.solved;
   must('nonogram-done').hidden = !state.nonogram.solved;
-  must('panel').setAttribute('aria-labelledby', sudokuOn ? 'tab-sudoku' : 'tab-nonogram');
-  const puzzleName = sudokuOn ? 'Sudoku' : 'Nonogram';
+  must('wordsearch-done').hidden = !state.wordsearch.solved;
+  const labelledBy = sudokuOn ? 'tab-sudoku' : nonogramOn ? 'tab-nonogram' : 'tab-wordsearch';
+  must('panel').setAttribute('aria-labelledby', labelledBy);
+  const puzzleName = sudokuOn ? 'Sudoku' : nonogramOn ? 'Nonogram' : 'Word search';
   document.title = `${puzzleName} · Mossgate Puzzles`;
   const heading = document.getElementById('puzzle-heading');
   if (heading) heading.textContent = puzzleName;
 
-  const streak = streakLabel(
-    visibleStreak(sudokuOn ? state.sudokuStreak : state.nonogramStreak, state.today),
-  );
+  const streakRecord = sudokuOn ? state.sudokuStreak : nonogramOn ? state.nonogramStreak : state.wordsearchStreak;
+  const streak = streakLabel(visibleStreak(streakRecord, state.today));
   const archive = state.puzzleDate && state.puzzleDate !== state.today ? 'Archive · ' : '';
   if (sudokuOn && state.sudokuPuzzle) {
     const clues = clueCount(state.sudokuPuzzle.givens);
     must('meta').textContent = `${archive}${sudokuBand(clues)} · ${streak}`;
-  } else if (!sudokuOn) {
+  } else if (nonogramOn) {
     must('meta').textContent = `${archive}Daily · ${streak}`;
+  } else if (state.wordsearchPuzzle) {
+    const weekend = state.wordsearchPuzzle.weekend ? 'Sunday challenge · ' : '';
+    const found = state.wordsearch.found.length;
+    must('meta').textContent = `${archive}${weekend}${state.wordsearchPuzzle.theme} · ${found}/${state.wordsearchPuzzle.words.length} · ${streak}`;
   } else {
     must('meta').textContent = `${archive}${streak}`;
   }
@@ -288,7 +332,9 @@ function padLocked(): boolean {
 
 function canUndo(): boolean {
   if (progressOf(state.mode).solved) return false;
-  return state.mode === 'sudoku' ? state.sudokuUndo.length > 0 : state.nonogramUndo.length > 0;
+  if (state.mode === 'sudoku') return state.sudokuUndo.length > 0;
+  if (state.mode === 'nonogram') return state.nonogramUndo.length > 0;
+  return state.wordsearchUndo.length > 0;
 }
 
 function selectedDigit(): number {
@@ -317,7 +363,8 @@ function syncPadState(): void {
   const label = document.getElementById('pad-label');
   if (label) {
     if (state.mode === 'sudoku') label.textContent = state.notesMode ? 'Notes' : 'Digits';
-    else label.textContent = state.tool === 'fill' ? 'Fill' : state.tool === 'cross' ? 'Cross' : 'Erase';
+    else if (state.mode === 'nonogram') label.textContent = state.tool === 'fill' ? 'Fill' : state.tool === 'cross' ? 'Cross' : 'Erase';
+    else label.textContent = 'Words';
   }
   must('pad').hidden = state.mode === 'sudoku' && !state.sudokuPuzzle && !state.sudokuError;
 }
@@ -337,7 +384,7 @@ function renderPad(): void {
         <button type="button" id="undo">Undo</button>
       </div>
     `;
-  } else {
+  } else if (state.mode === 'nonogram') {
     pad.innerHTML = `
       <p class="pad-label" id="pad-label">Fill</p>
       <div class="pad-tools">
@@ -347,12 +394,25 @@ function renderPad(): void {
         <button type="button" id="undo">Undo</button>
       </div>
     `;
+  } else {
+    const words = (state.wordsearchPuzzle?.words ?? []).slice().sort();
+    const items = words
+      .map((word) => `<li class="${state.wordsearch.found.includes(word) ? 'found' : ''}">${word}</li>`)
+      .join('');
+    pad.innerHTML = `
+      <p class="pad-label" id="pad-label">Words</p>
+      <ul class="word-list" aria-label="Words to find">${items}</ul>
+      <div class="pad-tools">
+        <button type="button" id="undo">Undo</button>
+      </div>
+    `;
   }
   syncPadState();
 }
 
 function renderHelp(): void {
-  must('help-body').innerHTML = state.mode === 'sudoku' ? SUDOKU_HELP : NONOGRAM_HELP;
+  const help = state.mode === 'sudoku' ? SUDOKU_HELP : state.mode === 'nonogram' ? NONOGRAM_HELP : WORDSEARCH_HELP;
+  must('help-body').innerHTML = help;
 }
 
 function describeSudoku(index: number): string {
@@ -505,9 +565,37 @@ function renderNonogramBoard(): void {
   });
 }
 
+function renderWordsearchBoard(): void {
+  const wrap = must('board-wrap');
+  const puzzle = state.wordsearchPuzzle;
+  if (state.wordsearchError || !puzzle) {
+    wrap.innerHTML = `<p class="error" role="alert">This word search could not be built. <button type="button" id="reload">Reload</button></p>`;
+    return;
+  }
+  wrap.innerHTML = wordsearchBoardHtml(puzzle, state.wordsearch.found, state.wordsearchAnchor, state.wordsearchSelected);
+}
+
+function refreshWordsearchSurface(): void {
+  const puzzle = state.wordsearchPuzzle;
+  if (!puzzle) return;
+  const html = wordsearchBoardHtml(puzzle, state.wordsearch.found, state.wordsearchAnchor, state.wordsearchSelected);
+  const wrap = must('board-wrap');
+  const scroller = wrap.querySelector('.wordsearch-scroll');
+  const scrollLeft = scroller?.scrollLeft ?? 0;
+  const scrollTop = scroller?.scrollTop ?? 0;
+  wrap.innerHTML = html;
+  const next = wrap.querySelector('.wordsearch-scroll');
+  if (next) {
+    next.scrollLeft = scrollLeft;
+    next.scrollTop = scrollTop;
+  }
+  renderPad();
+}
+
 function renderBoard(): void {
   if (state.mode === 'sudoku') renderSudokuBoard();
-  else renderNonogramBoard();
+  else if (state.mode === 'nonogram') renderNonogramBoard();
+  else renderWordsearchBoard();
 }
 
 function focusSelected(preventScroll: boolean): void {
@@ -522,14 +610,17 @@ function finish(mode: Mode): void {
   progress.userPaused = false;
   syncClock(mode);
   if (mode === 'sudoku') state.sudokuStreak = recordIfToday(state.sudokuStreak, state.puzzleDate, state.today);
-  else state.nonogramStreak = recordIfToday(state.nonogramStreak, state.puzzleDate, state.today);
+  else if (mode === 'nonogram') state.nonogramStreak = recordIfToday(state.nonogramStreak, state.puzzleDate, state.today);
+  else state.wordsearchStreak = recordIfToday(state.wordsearchStreak, state.puzzleDate, state.today);
   persist();
   renderChrome();
   if (mode === 'sudoku') refreshSudokuButtons();
-  else renderNonogramBoard();
-  const name = mode === 'sudoku' ? 'sudoku' : 'nonogram';
+  else if (mode === 'nonogram') renderNonogramBoard();
+  else refreshWordsearchSurface();
+  const name = mode === 'sudoku' ? 'sudoku' : mode === 'nonogram' ? 'nonogram' : 'word search';
   const time = formatDuration(shownElapsed(mode));
-  const streak = visibleStreak(mode === 'sudoku' ? state.sudokuStreak : state.nonogramStreak, state.today);
+  const streakRecord = mode === 'sudoku' ? state.sudokuStreak : mode === 'nonogram' ? state.nonogramStreak : state.wordsearchStreak;
+  const streak = visibleStreak(streakRecord, state.today);
   must('solved-title').textContent = 'Solved';
   must('solved-detail').textContent = solvedSentence(name, time, streak);
   must<HTMLTextAreaElement>('share-text').value = shareText();
@@ -549,8 +640,9 @@ function solvedSentence(name: string, time: string, streak: number): string {
 }
 
 function openShare(): void {
-  const name = state.mode === 'sudoku' ? 'sudoku' : 'nonogram';
-  const streak = visibleStreak(state.mode === 'sudoku' ? state.sudokuStreak : state.nonogramStreak, state.today);
+  const name = state.mode === 'sudoku' ? 'sudoku' : state.mode === 'nonogram' ? 'nonogram' : 'word search';
+  const streakRecord = state.mode === 'sudoku' ? state.sudokuStreak : state.mode === 'nonogram' ? state.nonogramStreak : state.wordsearchStreak;
+  const streak = visibleStreak(streakRecord, state.today);
   must('solved-detail').textContent = solvedSentence(name, formatDuration(shownElapsed(state.mode)), streak);
   must<HTMLTextAreaElement>('share-text').value = shareText();
   const dialog = must<HTMLDialogElement>('solved-dialog');
@@ -590,6 +682,16 @@ function placeSudoku(digit: number | null): void {
 }
 
 function undo(): void {
+  if (state.mode === 'wordsearch') {
+    if (state.wordsearch.solved) return;
+    const word = state.wordsearchUndo.pop();
+    if (!word) return;
+    state.wordsearch.found = state.wordsearch.found.filter((item) => item !== word);
+    refreshWordsearchSurface();
+    syncPadState();
+    persist();
+    return;
+  }
   if (state.mode === 'sudoku') {
     if (state.sudoku.solved) return;
     const item = state.sudokuUndo.pop();
@@ -692,10 +794,58 @@ function buttonFromTarget(target: EventTarget | null): HTMLButtonElement | null 
   return button instanceof HTMLButtonElement ? button : null;
 }
 
+function onWordsearchPick(index: number): void {
+  const puzzle = state.wordsearchPuzzle;
+  if (!puzzle) return;
+  state.wordsearchSelected = index;
+  if (state.wordsearch.solved) {
+    refreshWordsearchSurface();
+    return;
+  }
+  if (state.wordsearchAnchor == null || state.wordsearchAnchor === index) {
+    state.wordsearchAnchor = state.wordsearchAnchor === index ? null : index;
+    refreshWordsearchSurface();
+    return;
+  }
+  const indexes = selectionIndexes(puzzle.size, state.wordsearchAnchor, index);
+  if (!indexes) {
+    announce('Choose the last letter across, down, or on a diagonal.');
+    refreshWordsearchSurface();
+    return;
+  }
+  const text = indexes.map((cell) => puzzle.grid[cell] ?? '').join('');
+  state.wordsearchAnchor = null;
+  if (!puzzle.words.includes(text)) {
+    announce(`${text} is not in the list.`);
+    refreshWordsearchSurface();
+    return;
+  }
+  if (state.wordsearch.found.includes(text)) {
+    announce(`${text} is already found.`);
+    refreshWordsearchSurface();
+    return;
+  }
+  state.wordsearchUndo.push(text);
+  state.wordsearch.found = [...state.wordsearch.found, text];
+  syncClock('wordsearch');
+  refreshWordsearchSurface();
+  renderClock();
+  if (state.wordsearch.found.length === puzzle.words.length) finish('wordsearch');
+  else {
+    persist();
+    focusSelected(true);
+  }
+}
+
 function onPointerDown(event: PointerEvent): void {
   const button = buttonFromTarget(event.target);
   if (!button) return;
   const index = Number(button.dataset.i);
+  if (state.mode === 'wordsearch') {
+    event.preventDefault();
+    onWordsearchPick(index);
+    return;
+  }
   if (state.mode === 'sudoku') {
     if (!state.sudokuPuzzle) return;
     state.sudokuSelected = index;
@@ -733,7 +883,7 @@ function onPointerMove(event: PointerEvent): void {
 }
 
 function moveSelection(rowDelta: number, colDelta: number): void {
-  const size = state.mode === 'sudoku' ? 9 : (state.nonogramPuzzle?.size ?? 10);
+  const size = state.mode === 'sudoku' ? 9 : state.mode === 'nonogram' ? (state.nonogramPuzzle?.size ?? 10) : (state.wordsearchPuzzle?.size ?? 20);
   const current = selectedIndex();
   const row = Math.floor(current / size);
   const col = current % size;
@@ -743,9 +893,12 @@ function moveSelection(rowDelta: number, colDelta: number): void {
   if (state.mode === 'sudoku') {
     state.sudokuSelected = next;
     refreshSudokuButtons();
-  } else {
+  } else if (state.mode === 'nonogram') {
     state.nonogramSelected = next;
     refreshNonogramSurface();
+  } else {
+    state.wordsearchSelected = next;
+    refreshWordsearchSurface();
   }
   focusSelected(false);
 }
@@ -766,9 +919,11 @@ function onKey(event: KeyboardEvent): void {
   if (event.altKey) return;
   if (target.closest('[role="tablist"]') && (event.key === 'ArrowRight' || event.key === 'ArrowLeft')) {
     event.preventDefault();
-    const next = event.key === 'ArrowRight' ? (state.mode === 'sudoku' ? 'nonogram' : 'sudoku') : state.mode === 'nonogram' ? 'sudoku' : 'nonogram';
+    const order: Mode[] = ['sudoku', 'nonogram', 'wordsearch'];
+    const step = event.key === 'ArrowRight' ? 1 : -1;
+    const next = order[(order.indexOf(state.mode) + step + order.length) % order.length] ?? 'sudoku';
     selectMode(next);
-    must(next === 'sudoku' ? 'tab-sudoku' : 'tab-nonogram').focus();
+    must(`tab-${next}`).focus();
     return;
   }
   const inGrid = Boolean(target.closest('#board-wrap'));
@@ -782,6 +937,20 @@ function onKey(event: KeyboardEvent): void {
   if (event.key.toLowerCase() === 'u') {
     event.preventDefault();
     undo();
+    return;
+  }
+
+  if (state.mode === 'wordsearch') {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      state.wordsearchAnchor = null;
+      refreshWordsearchSurface();
+      return;
+    }
+    if ((event.key === 'Enter' || event.key === ' ') && inGrid) {
+      event.preventDefault();
+      onWordsearchPick(state.wordsearchSelected);
+    }
     return;
   }
 
@@ -838,7 +1007,7 @@ function moveAndStop(event: KeyboardEvent, rowDelta: number, colDelta: number): 
 function selectMode(mode: Mode): void {
   if (mode === state.mode) return;
   const url = new URL(location.href);
-  url.hash = mode === 'nonogram' ? 'nonogram' : 'sudoku';
+  url.hash = mode === 'nonogram' ? 'nonogram' : mode === 'wordsearch' ? 'wordsearch' : 'sudoku';
   history.pushState(null, '', `${url.pathname}${url.search}${url.hash}`);
   applyMode(mode);
 }
@@ -856,7 +1025,9 @@ function applyMode(mode: Mode): void {
 }
 
 function readMode(): Mode {
-  return location.hash === '#nonogram' ? 'nonogram' : 'sudoku';
+  if (location.hash === '#nonogram') return 'nonogram';
+  if (location.hash === '#wordsearch') return 'wordsearch';
+  return 'sudoku';
 }
 
 function firstEditable(): number {
@@ -879,6 +1050,13 @@ function reconcile(mode: Mode): void {
       state.nonogram.solved = true;
       state.nonogramStreak = recordIfToday(state.nonogramStreak, state.puzzleDate, state.today);
     } else if (!complete) state.nonogram.solved = false;
+  }
+  if (mode === 'wordsearch' && state.wordsearchPuzzle) {
+    const complete = state.wordsearch.found.length === state.wordsearchPuzzle.words.length;
+    if (complete && !state.wordsearch.solved) {
+      state.wordsearch.solved = true;
+      state.wordsearchStreak = recordIfToday(state.wordsearchStreak, state.puzzleDate, state.today);
+    } else if (!complete) state.wordsearch.solved = false;
   }
 }
 
@@ -906,13 +1084,18 @@ function loadDayProgress(date: string): void {
   const day = state.days[date];
   state.sudoku = day?.sudoku ?? emptySudokuProgress();
   state.nonogram = day?.nonogram ?? emptyNonogramProgress();
+  state.wordsearch = day?.wordsearch ?? emptyWordSearchProgress();
   state.sudokuUndo = [];
   state.nonogramUndo = [];
+  state.wordsearchUndo = [];
+  state.wordsearchAnchor = null;
   drag = null;
   runtime.sudoku.runningSince = null;
   runtime.nonogram.runningSince = null;
+  runtime.wordsearch.runningSince = null;
   state.sudokuSelected = 0;
   state.nonogramSelected = 0;
+  state.wordsearchSelected = 0;
 }
 
 let sudokuTicket = 0;
@@ -944,6 +1127,7 @@ function switchToDate(date: string): void {
   state.puzzleDate = date;
   state.sudokuError = false;
   state.nonogramError = false;
+  state.wordsearchError = false;
   state.sudokuPuzzle = null;
   loadDayProgress(date);
   try {
@@ -952,7 +1136,15 @@ function switchToDate(date: string): void {
     state.nonogramError = true;
     state.nonogramPuzzle = null;
   }
+  try {
+    state.wordsearchPuzzle = wordsearchForDate(date);
+    state.wordsearch.found = state.wordsearch.found.filter((word) => state.wordsearchPuzzle?.words.includes(word));
+  } catch {
+    state.wordsearchError = true;
+    state.wordsearchPuzzle = null;
+  }
   reconcile('nonogram');
+  reconcile('wordsearch');
   const line = must<HTMLTimeElement>('date-line');
   line.dateTime = date;
   line.textContent = formatLongDate(date);
@@ -994,7 +1186,7 @@ function boot(): void {
       <main id="main">
         <p class="eyebrow">Daily puzzles</p>
         <h1 id="puzzle-heading">Sudoku</h1>
-        <p class="lede">A daily sudoku and a daily nonogram. Everyone playing on this date gets the same puzzles. Each one has a single solution.</p>
+        <p class="lede">A daily sudoku, a daily nonogram, and a daily word search. Everyone playing on this date gets the same puzzles. Each one has a single solution.</p>
         <p class="dateline"><time id="date-line"></time></p>
         <div class="day-nav">
           <button type="button" id="prev-day">Previous day</button>
@@ -1007,6 +1199,7 @@ function boot(): void {
         <div class="tabs" role="tablist" aria-label="Puzzles">
           <button type="button" id="tab-sudoku" role="tab" aria-selected="true" aria-controls="panel">Sudoku <span id="sudoku-done" class="done" hidden>Done</span></button>
           <button type="button" id="tab-nonogram" role="tab" aria-selected="false" aria-controls="panel" tabindex="-1">Nonogram <span id="nonogram-done" class="done" hidden>Done</span></button>
+          <button type="button" id="tab-wordsearch" role="tab" aria-selected="false" aria-controls="panel" tabindex="-1">Word search <span id="wordsearch-done" class="done" hidden>Done</span></button>
         </div>
         <p id="rollover" class="banner" hidden>A new puzzle day has started in Tokyo. <button type="button" id="load-today">Load today’s puzzles</button></p>
         <div id="panel" role="tabpanel" aria-labelledby="tab-sudoku">
@@ -1064,6 +1257,7 @@ function boot(): void {
   state.checkMistakes = save.checkMistakes;
   state.sudokuStreak = save.sudokuStreak;
   state.nonogramStreak = save.nonogramStreak;
+  state.wordsearchStreak = save.wordsearchStreak;
   state.days = save.days;
   loadDayProgress(state.puzzleDate);
 
@@ -1072,11 +1266,19 @@ function boot(): void {
   } catch {
     state.nonogramError = true;
   }
+  try {
+    state.wordsearchPuzzle = wordsearchForDate(state.puzzleDate);
+    state.wordsearch.found = state.wordsearch.found.filter((word) => state.wordsearchPuzzle?.words.includes(word));
+  } catch {
+    state.wordsearchError = true;
+  }
   reconcile('nonogram');
+  reconcile('wordsearch');
   state.mode = readMode();
 
   must('tab-sudoku').addEventListener('click', () => selectMode('sudoku'));
   must('tab-nonogram').addEventListener('click', () => selectMode('nonogram'));
+  must('tab-wordsearch').addEventListener('click', () => selectMode('wordsearch'));
   must('prev-day').addEventListener('click', () => navigateDate(addDays(state.puzzleDate, -1)));
   must('next-day').addEventListener('click', () => navigateDate(addDays(state.puzzleDate, 1)));
   must('archive-list').addEventListener('click', (event) => {
@@ -1101,7 +1303,8 @@ function boot(): void {
     state.checkMistakes = !state.checkMistakes;
     renderChrome();
     if (state.mode === 'sudoku' && state.sudokuPuzzle) refreshSudokuButtons();
-    else if (state.nonogramPuzzle) refreshNonogramSurface();
+    else if (state.mode === 'nonogram' && state.nonogramPuzzle) refreshNonogramSurface();
+    else if (state.wordsearchPuzzle) refreshWordsearchSurface();
     persist();
     announce(state.checkMistakes ? 'Mistake checking on.' : 'Mistake checking off.');
   });
@@ -1156,6 +1359,7 @@ function boot(): void {
     } else {
       syncClock('sudoku');
       syncClock('nonogram');
+      syncClock('wordsearch');
       renderClock();
       checkRollover();
     }

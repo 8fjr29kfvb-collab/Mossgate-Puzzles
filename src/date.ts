@@ -70,6 +70,13 @@ export function daysBetween(fromIso: string, toIso: string): number {
   return Math.round((to - from) / 86_400_000);
 }
 
+/** 0 is Sunday, matching the Tokyo calendar date. */
+export function weekdayIndex(iso: string): number {
+  if (!isIsoDate(iso)) throw new Error(`Bad date ${iso}`);
+  const [year, month, day] = iso.split('-').map(Number);
+  return new Date(Date.UTC(year!, (month ?? 1) - 1, day ?? 1)).getUTCDay();
+}
+
 export function formatLongDate(iso: string): string {
   const [year, month, day] = iso.split('-').map(Number);
   const utc = new Date(Date.UTC(year!, (month ?? 1) - 1, day ?? 1, 12));
