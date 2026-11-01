@@ -1,11 +1,8 @@
-import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
 import { readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { nonogramBoardHtml } from '../src/nonogram-board.ts';
 import { nonogramForDate } from '../src/nonogram.ts';
+import { withChrome } from './chrome-page.ts';
 
 const css = readFileSync(new URL('../src/style.css', import.meta.url), 'utf8');
 
@@ -119,87 +116,6 @@ const measureScript = `(() => {
   }
   return out;
 })()`;
-
-async function withChrome(run: (evaluate: (expression: string) => Promise<unknown>, setViewport: (width: number, height: number) => Promise<void>, setHtml: (html: string) => Promise<void>) => Promise<void>): Promise<void> {
-  const port = 9400 + Math.floor(Math.random() * 500);
-  const profile = mkdtempSync(join(tmpdir(), 'nonogram-chrome-'));
-  const chrome: ChildProcess = spawn(
-    'google-chrome',
-    [
-      '--headless=new',
-      '--no-sandbox',
-      '--disable-gpu',
-      '--disable-dev-shm-usage',
-      `--remote-debugging-port=${port}`,
-      `--user-data-dir=${profile}`,
-      'about:blank',
-    ],
-    { stdio: 'ignore' },
-  );
-  try {
-    let pageSocket = '';
-    for (let attempt = 0; attempt < 40; attempt++) {
-      try {
-        const response = await fetch(`http://127.0.0.1:${port}/json/list`);
-        if (response.ok) {
-          const pages = (await response.json()) as { type: string; webSocketDebuggerUrl: string }[];
-          pageSocket = pages.find((page) => page.type === 'page')?.webSocketDebuggerUrl ?? '';
-          if (pageSocket) break;
-        }
-      } catch {
-        // Chrome is still starting.
-      }
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    if (!pageSocket) throw new Error('Chrome did not open a page debugging socket');
-    const ws = new WebSocket(pageSocket);
-    await new Promise<void>((resolve, reject) => {
-      ws.addEventListener('open', () => resolve());
-      ws.addEventListener('error', () => reject(new Error('Chrome debugger socket failed')));
-    });
-    let nextId = 0;
-    const pending = new Map<number, (value: unknown) => void>();
-    ws.addEventListener('message', (event) => {
-      const message = JSON.parse(String(event.data)) as { id?: number; result?: unknown; error?: { message: string } };
-      if (message.id != null && pending.has(message.id)) {
-        const resolve = pending.get(message.id);
-        pending.delete(message.id);
-        if (message.error) resolve?.(Promise.reject(new Error(`${message.error.message}`)));
-        else resolve?.(message.result);
-      }
-    });
-    const send = (method: string, params: Record<string, unknown> = {}) =>
-      new Promise<unknown>((resolve, reject) => {
-        const id = ++nextId;
-        pending.set(id, (value: unknown) => {
-          if (value instanceof Promise) value.then(resolve, reject);
-          else resolve(value);
-        });
-        ws.send(JSON.stringify({ id, method, params }));
-      });
-    await send('Page.enable');
-    await send('Runtime.enable');
-    const tree = (await send('Page.getFrameTree')) as { frameTree: { frame: { id: string } } };
-    const frameId = tree.frameTree.frame.id;
-    const setViewport = async (width: number, height: number) => {
-      await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: width < 500 });
-    };
-    const setHtml = async (html: string) => {
-      await send('Page.setDocumentContent', { frameId, html });
-      await send('Runtime.evaluate', { expression: 'document.fonts ? document.fonts.ready : null', awaitPromise: true });
-    };
-    const evaluate = async (expression: string) => {
-      const result = (await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })) as {
-        result?: { value?: unknown };
-      };
-      return result.result?.value;
-    };
-    await run(evaluate, setViewport, setHtml);
-    ws.close();
-  } finally {
-    chrome.kill();
-  }
-}
 
 function normalize(measure: Measure): Measure {
   const origin = measure.cells[0];
