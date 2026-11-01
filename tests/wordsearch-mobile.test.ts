@@ -10,6 +10,7 @@ function startVite(port: number): Promise<ChildProcess> {
   return new Promise((resolve, reject) => {
     const child = spawn(viteBin, ['--host', '127.0.0.1', '--port', String(port), '--strictPort'], {
       cwd: root,
+      env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let output = '';
@@ -22,7 +23,8 @@ function startVite(port: number): Promise<ChildProcess> {
     };
     const onData = (chunk: Buffer) => {
       output += chunk.toString();
-      if (output.includes(`127.0.0.1:${port}`)) finish();
+      const plain = output.replace(/\u001b\[[0-9;]*m/g, '');
+      if (plain.includes(`127.0.0.1:${port}`)) finish();
     };
     child.stdout?.on('data', onData);
     child.stderr?.on('data', onData);
