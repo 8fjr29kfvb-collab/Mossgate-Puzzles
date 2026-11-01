@@ -9,6 +9,15 @@ export function emptyStreak(): StreakRecord {
   return { count: 0, lastDate: null };
 }
 
+/**
+ * Only a solve on the live Tokyo date moves the streak.
+ * An archive day keeps the record unchanged.
+ */
+export function recordIfToday(prev: StreakRecord, puzzleDate: string, today: string): StreakRecord {
+  if (puzzleDate !== today) return prev;
+  return recordCompletion(prev, today);
+}
+
 /** Completing the same Tokyo date twice does not add another day. */
 export function recordCompletion(prev: StreakRecord, date: string): StreakRecord {
   if (prev.lastDate === date) return prev;

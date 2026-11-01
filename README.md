@@ -2,7 +2,7 @@
 
 A woodland front page and a daily sudoku and nonogram. The site is static: the landing page, plus puzzles built in the browser. There is no account, no server, and no puzzle API.
 
-The front page is the gate. Today’s sudoku and nonogram are one click in, at `/play/`. Each puzzle has one solution. Progress and streaks stay in `localStorage` on the device.
+The front page is the gate. Today’s sudoku and nonogram are one click in, at `/play/`. Each puzzle has one solution. Progress and streaks stay in `localStorage` on the device. Earlier days are at `/play/?date=YYYY-MM-DD`, from the launch date 31 October 2026 through today in Tokyo.
 
 ## Run locally
 
@@ -51,9 +51,11 @@ Pictures are a checked catalog of at least 60 hand-built 10×10 grids in `src/pa
 - Arrow keys, digits, and the shortcuts in “How to play” work from the grid.
 - When a puzzle is finished, the solved screen includes share text: an emoji grid and the time, with no link.
 
-Streaks are per puzzle. Finishing the same Tokyo date twice does not add a day. Missing a day resets that streak. The count still shows on the following morning so it is clear what continuing would keep.
+Streaks are per puzzle. Finishing the same Tokyo date twice does not add a day. Missing a day resets that streak. The count still shows on the following morning so it is clear what continuing would keep. Solving an earlier date does not change the streak. Share text names the puzzle’s date.
 
-The save key is `mossgate-puzzles-v1`.
+Previous day and Next day step through the archive. The Archive list runs from today back to launch and marks a day with a check when both puzzles are solved. The list is only on this device.
+
+The save key is `mossgate-puzzles-v1`. The document version is 2: a map of date to that day’s progress, capped at 60 dates. A version 1 save, which stored only the latest day, is read into that day’s slot so it is not dropped.
 
 ## Visit counter
 

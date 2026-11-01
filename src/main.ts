@@ -2,16 +2,19 @@ import '@fontsource/atkinson-hyperlegible/latin-400.css';
 import '@fontsource/atkinson-hyperlegible/latin-700.css';
 import './style.css';
 import { installVisitCounter } from './counter.ts';
-import { formatDuration, formatLongDate, tokyoDateString } from './date.ts';
+import { addDays, archiveDates, clampPuzzleDate, formatDuration, formatLongDate, LAUNCH_DATE, tokyoDateString } from './date.ts';
 import { describeNonogramCell, nonogramBoardHtml, nonogramButtonClass } from './nonogram-board.ts';
 import { lineClues, nonogramForDate, type NonogramPuzzle } from './nonogram.ts';
 import { nonogramShareText, sudokuShareText } from './share.ts';
-import { recordCompletion, streakLabel, visibleStreak, type StreakRecord } from './streak.ts';
+import { recordIfToday, streakLabel, visibleStreak, type StreakRecord } from './streak.ts';
 import {
   emptyNonogramProgress,
   emptySudokuProgress,
+  isDaySolved,
   loadSave,
+  trimDays,
   writeSave,
+  type DayProgress,
   type NonogramProgress,
   type SudokuProgress,
 } from './storage.ts';
@@ -46,6 +49,8 @@ const NONOGRAM_HELP = `
 
 const state = {
   today: '',
+  puzzleDate: '',
+  days: {} as Record<string, DayProgress>,
   mode: 'sudoku' as Mode,
   largePrint: false,
   checkMistakes: false,
@@ -183,24 +188,36 @@ function selectedIndex(): number {
 
 function shareText(): string {
   if (state.mode === 'sudoku' && state.sudokuPuzzle) {
-    return sudokuShareText(state.today, shownElapsed('sudoku'), state.sudokuPuzzle.givens);
+    return sudokuShareText(state.puzzleDate, shownElapsed('sudoku'), state.sudokuPuzzle.givens);
   }
   if (state.nonogramPuzzle) {
-    return nonogramShareText(state.today, shownElapsed('nonogram'), state.nonogramPuzzle.solution);
+    return nonogramShareText(state.puzzleDate, shownElapsed('nonogram'), state.nonogramPuzzle.solution);
   }
   return '';
 }
 
+function dayHasProgress(day: DayProgress): boolean {
+  const sudoku = day.sudoku;
+  const nonogram = day.nonogram;
+  const sudokuWork = Boolean(
+    sudoku && (sudoku.solved || sudoku.elapsed > 0 || sudoku.values.some(Boolean) || sudoku.notes.some(Boolean)),
+  );
+  const nonogramWork = Boolean(nonogram && (nonogram.solved || nonogram.elapsed > 0 || nonogram.cells.some(Boolean)));
+  return sudokuWork || nonogramWork;
+}
+
 function persist(): void {
+  const day: DayProgress = { sudoku: state.sudoku, nonogram: state.nonogram };
+  if (state.puzzleDate && dayHasProgress(day)) state.days[state.puzzleDate] = day;
+  else if (state.puzzleDate) delete state.days[state.puzzleDate];
+  state.days = trimDays(state.days, 60, state.puzzleDate);
   writeSave(localStorage, {
-    version: 1,
+    version: 2,
     largePrint: state.largePrint,
     checkMistakes: state.checkMistakes,
     sudokuStreak: state.sudokuStreak,
     nonogramStreak: state.nonogramStreak,
-    progressDate: state.today,
-    sudoku: state.sudoku,
-    nonogram: state.nonogram,
+    days: state.days,
   });
 }
 
@@ -239,14 +256,19 @@ function renderChrome(): void {
   const heading = document.getElementById('puzzle-heading');
   if (heading) heading.textContent = puzzleName;
 
+  const streak = streakLabel(
+    visibleStreak(sudokuOn ? state.sudokuStreak : state.nonogramStreak, state.today),
+  );
+  const archive = state.puzzleDate && state.puzzleDate !== state.today ? 'Archive · ' : '';
   if (sudokuOn && state.sudokuPuzzle) {
     const clues = clueCount(state.sudokuPuzzle.givens);
-    must('meta').textContent = `${sudokuBand(clues)} · ${streakLabel(visibleStreak(state.sudokuStreak, state.today))}`;
+    must('meta').textContent = `${archive}${sudokuBand(clues)} · ${streak}`;
   } else if (!sudokuOn) {
-    must('meta').textContent = `Daily · ${streakLabel(visibleStreak(state.nonogramStreak, state.today))}`;
+    must('meta').textContent = `${archive}Daily · ${streak}`;
   } else {
-    must('meta').textContent = streakLabel(visibleStreak(state.sudokuStreak, state.today));
+    must('meta').textContent = `${archive}${streak}`;
   }
+  renderArchive();
 
   const mistakes = must<HTMLButtonElement>('mistakes');
   mistakes.setAttribute('aria-pressed', String(state.checkMistakes));
@@ -499,8 +521,8 @@ function finish(mode: Mode): void {
   progress.solved = true;
   progress.userPaused = false;
   syncClock(mode);
-  if (mode === 'sudoku') state.sudokuStreak = recordCompletion(state.sudokuStreak, state.today);
-  else state.nonogramStreak = recordCompletion(state.nonogramStreak, state.today);
+  if (mode === 'sudoku') state.sudokuStreak = recordIfToday(state.sudokuStreak, state.puzzleDate, state.today);
+  else state.nonogramStreak = recordIfToday(state.nonogramStreak, state.puzzleDate, state.today);
   persist();
   renderChrome();
   if (mode === 'sudoku') refreshSudokuButtons();
@@ -509,7 +531,7 @@ function finish(mode: Mode): void {
   const time = formatDuration(shownElapsed(mode));
   const streak = visibleStreak(mode === 'sudoku' ? state.sudokuStreak : state.nonogramStreak, state.today);
   must('solved-title').textContent = 'Solved';
-  must('solved-detail').textContent = `You finished today’s ${name} in ${time}. ${streakLabel(streak)}.`;
+  must('solved-detail').textContent = solvedSentence(name, time, streak);
   must<HTMLTextAreaElement>('share-text').value = shareText();
   const dialog = must<HTMLDialogElement>('solved-dialog');
   if (!dialog.open) dialog.showModal();
@@ -517,9 +539,19 @@ function finish(mode: Mode): void {
   announce(`${name[0]!.toUpperCase()}${name.slice(1)} solved in ${time}. ${streakLabel(streak)}.`);
 }
 
+function solvedSentence(name: string, time: string, streak: number): string {
+  const when =
+    state.puzzleDate === state.today ? `today’s ${name}` : `the ${formatLongDate(state.puzzleDate)} ${name}`;
+  if (state.puzzleDate !== state.today) {
+    return `You finished ${when} in ${time}. Past days do not count toward your streak.`;
+  }
+  return `You finished ${when} in ${time}. ${streakLabel(streak)}.`;
+}
+
 function openShare(): void {
   const name = state.mode === 'sudoku' ? 'sudoku' : 'nonogram';
-  must('solved-detail').textContent = `You finished today’s ${name} in ${formatDuration(shownElapsed(state.mode))}. ${streakLabel(visibleStreak(state.mode === 'sudoku' ? state.sudokuStreak : state.nonogramStreak, state.today))}.`;
+  const streak = visibleStreak(state.mode === 'sudoku' ? state.sudokuStreak : state.nonogramStreak, state.today);
+  must('solved-detail').textContent = solvedSentence(name, formatDuration(shownElapsed(state.mode)), streak);
   must<HTMLTextAreaElement>('share-text').value = shareText();
   const dialog = must<HTMLDialogElement>('solved-dialog');
   if (!dialog.open) dialog.showModal();
@@ -805,8 +837,9 @@ function moveAndStop(event: KeyboardEvent, rowDelta: number, colDelta: number): 
 
 function selectMode(mode: Mode): void {
   if (mode === state.mode) return;
-  const hash = mode === 'nonogram' ? '#nonogram' : '#sudoku';
-  if (location.hash !== hash) history.pushState(null, '', hash);
+  const url = new URL(location.href);
+  url.hash = mode === 'nonogram' ? 'nonogram' : 'sudoku';
+  history.pushState(null, '', `${url.pathname}${url.search}${url.hash}`);
   applyMode(mode);
 }
 
@@ -837,20 +870,114 @@ function reconcile(mode: Mode): void {
     const complete = sudokuComplete();
     if (complete && !state.sudoku.solved) {
       state.sudoku.solved = true;
-      state.sudokuStreak = recordCompletion(state.sudokuStreak, state.today);
+      state.sudokuStreak = recordIfToday(state.sudokuStreak, state.puzzleDate, state.today);
     } else if (!complete) state.sudoku.solved = false;
   }
   if (mode === 'nonogram' && state.nonogramPuzzle) {
     const complete = nonogramComplete();
     if (complete && !state.nonogram.solved) {
       state.nonogram.solved = true;
-      state.nonogramStreak = recordCompletion(state.nonogramStreak, state.today);
+      state.nonogramStreak = recordIfToday(state.nonogramStreak, state.puzzleDate, state.today);
     } else if (!complete) state.nonogram.solved = false;
   }
 }
 
 function checkRollover(): void {
   must('rollover').hidden = tokyoDateString() === state.today;
+}
+
+function renderArchive(): void {
+  const prev = document.getElementById('prev-day');
+  const next = document.getElementById('next-day');
+  if (prev instanceof HTMLButtonElement) prev.disabled = state.puzzleDate <= LAUNCH_DATE;
+  if (next instanceof HTMLButtonElement) next.disabled = !state.puzzleDate || state.puzzleDate >= state.today;
+  const list = document.getElementById('archive-list');
+  if (!list || !state.today) return;
+  const items = archiveDates(state.today).map((iso) => {
+    const solved = isDaySolved(state.days[iso]);
+    const current = iso === state.puzzleDate;
+    const label = `${formatLongDate(iso)}${solved ? ', solved' : ''}`;
+    return `<li><button type="button" data-date="${iso}" aria-label="${label}"${current ? ' aria-current="date"' : ''}>${formatLongDate(iso)}${solved ? ' <span aria-hidden="true">✓</span>' : ''}</button></li>`;
+  });
+  list.innerHTML = items.join('');
+}
+
+function loadDayProgress(date: string): void {
+  const day = state.days[date];
+  state.sudoku = day?.sudoku ?? emptySudokuProgress();
+  state.nonogram = day?.nonogram ?? emptyNonogramProgress();
+  state.sudokuUndo = [];
+  state.nonogramUndo = [];
+  drag = null;
+  runtime.sudoku.runningSince = null;
+  runtime.nonogram.runningSince = null;
+  state.sudokuSelected = 0;
+  state.nonogramSelected = 0;
+}
+
+let sudokuTicket = 0;
+
+function scheduleSudoku(date: string): void {
+  const ticket = ++sudokuTicket;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (ticket !== sudokuTicket || state.puzzleDate !== date) return;
+      try {
+        state.sudokuPuzzle = sudokuForDate(date);
+        state.sudokuSelected = firstEditable();
+        reconcile('sudoku');
+        syncClock('sudoku');
+      } catch {
+        state.sudokuError = true;
+      }
+      if (state.mode === 'sudoku') renderBoard();
+      renderChrome();
+      persist();
+    });
+  });
+}
+
+function switchToDate(date: string): void {
+  if (date === state.puzzleDate) return;
+  freezeClocks();
+  persist();
+  state.puzzleDate = date;
+  state.sudokuError = false;
+  state.nonogramError = false;
+  state.sudokuPuzzle = null;
+  loadDayProgress(date);
+  try {
+    state.nonogramPuzzle = nonogramForDate(date);
+  } catch {
+    state.nonogramError = true;
+    state.nonogramPuzzle = null;
+  }
+  reconcile('nonogram');
+  const line = must<HTMLTimeElement>('date-line');
+  line.dateTime = date;
+  line.textContent = formatLongDate(date);
+  renderHelp();
+  renderPad();
+  renderBoard();
+  renderChrome();
+  scheduleSudoku(date);
+}
+
+function navigateDate(date: string): void {
+  const clamped = clampPuzzleDate(date, state.today);
+  if (clamped === state.puzzleDate) return;
+  const url = new URL(location.href);
+  if (clamped === state.today) url.searchParams.delete('date');
+  else url.searchParams.set('date', clamped);
+  history.pushState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  switchToDate(clamped);
+}
+
+function syncFromUrl(): void {
+  const date = clampPuzzleDate(new URLSearchParams(location.search).get('date'), state.today);
+  if (date !== state.puzzleDate) switchToDate(date);
+  const mode = readMode();
+  if (mode !== state.mode) applyMode(mode);
 }
 
 function boot(): void {
@@ -869,6 +996,14 @@ function boot(): void {
         <h1 id="puzzle-heading">Sudoku</h1>
         <p class="lede">A daily sudoku and a daily nonogram. Everyone playing on this date gets the same puzzles. Each one has a single solution.</p>
         <p class="dateline"><time id="date-line"></time></p>
+        <div class="day-nav">
+          <button type="button" id="prev-day">Previous day</button>
+          <button type="button" id="next-day">Next day</button>
+        </div>
+        <details id="archive">
+          <summary>Archive</summary>
+          <ul id="archive-list" class="archive-list"></ul>
+        </details>
         <div class="tabs" role="tablist" aria-label="Puzzles">
           <button type="button" id="tab-sudoku" role="tab" aria-selected="true" aria-controls="panel">Sudoku <span id="sudoku-done" class="done" hidden>Done</span></button>
           <button type="button" id="tab-nonogram" role="tab" aria-selected="false" aria-controls="panel" tabindex="-1">Nonogram <span id="nonogram-done" class="done" hidden>Done</span></button>
@@ -912,22 +1047,28 @@ function boot(): void {
   `;
 
   state.today = tokyoDateString();
+  state.puzzleDate = clampPuzzleDate(new URLSearchParams(location.search).get('date'), state.today);
+  const cleaned = new URL(location.href);
+  if (state.puzzleDate === state.today) cleaned.searchParams.delete('date');
+  else cleaned.searchParams.set('date', state.puzzleDate);
+  const cleanedHref = `${cleaned.pathname}${cleaned.search}${cleaned.hash}`;
+  if (cleanedHref !== `${location.pathname}${location.search}${location.hash}`) {
+    history.replaceState(null, '', cleanedHref);
+  }
   const dateLine = must<HTMLTimeElement>('date-line');
-  dateLine.dateTime = state.today;
-  dateLine.textContent = formatLongDate(state.today);
+  dateLine.dateTime = state.puzzleDate;
+  dateLine.textContent = formatLongDate(state.puzzleDate);
 
   const save = loadSave(localStorage);
   state.largePrint = save.largePrint;
   state.checkMistakes = save.checkMistakes;
   state.sudokuStreak = save.sudokuStreak;
   state.nonogramStreak = save.nonogramStreak;
-  if (save.progressDate === state.today) {
-    if (save.sudoku) state.sudoku = save.sudoku;
-    if (save.nonogram) state.nonogram = save.nonogram;
-  }
+  state.days = save.days;
+  loadDayProgress(state.puzzleDate);
 
   try {
-    state.nonogramPuzzle = nonogramForDate(state.today);
+    state.nonogramPuzzle = nonogramForDate(state.puzzleDate);
   } catch {
     state.nonogramError = true;
   }
@@ -936,7 +1077,18 @@ function boot(): void {
 
   must('tab-sudoku').addEventListener('click', () => selectMode('sudoku'));
   must('tab-nonogram').addEventListener('click', () => selectMode('nonogram'));
-  must('load-today').addEventListener('click', () => location.reload());
+  must('prev-day').addEventListener('click', () => navigateDate(addDays(state.puzzleDate, -1)));
+  must('next-day').addEventListener('click', () => navigateDate(addDays(state.puzzleDate, 1)));
+  must('archive-list').addEventListener('click', (event) => {
+    const button = event.target instanceof Element ? event.target.closest('button[data-date]') : null;
+    if (!(button instanceof HTMLButtonElement) || !button.dataset.date) return;
+    navigateDate(button.dataset.date);
+  });
+  must('load-today').addEventListener('click', () => {
+    const url = new URL(location.href);
+    url.searchParams.delete('date');
+    location.assign(`${url.pathname}${url.search}${url.hash}`);
+  });
   must('pause').addEventListener('click', () => {
     const progress = progressOf(state.mode);
     if (progress.solved || !hasWork(state.mode)) return;
@@ -1016,8 +1168,8 @@ function boot(): void {
     syncClock(state.mode);
     renderClock();
   });
-  window.addEventListener('popstate', () => applyMode(readMode()));
-  window.addEventListener('hashchange', () => applyMode(readMode()));
+  window.addEventListener('popstate', () => syncFromUrl());
+  window.addEventListener('hashchange', () => syncFromUrl());
 
   renderHelp();
   renderPad();
@@ -1026,21 +1178,7 @@ function boot(): void {
   renderChrome();
   installVisitCounter();
 
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      try {
-        state.sudokuPuzzle = sudokuForDate(state.today);
-        state.sudokuSelected = firstEditable();
-        reconcile('sudoku');
-        syncClock('sudoku');
-      } catch {
-        state.sudokuError = true;
-      }
-      if (state.mode === 'sudoku') renderBoard();
-      renderChrome();
-      persist();
-    });
-  });
+  scheduleSudoku(state.puzzleDate);
 
   window.setInterval(() => {
     if (runtime[state.mode].runningSince != null) renderClock();

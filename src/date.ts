@@ -4,6 +4,11 @@ export const TOKYO_TIME_ZONE = 'Asia/Tokyo';
 /** First catalog day. Nonogram pictures are indexed from this Tokyo date. */
 export const CATALOG_EPOCH = '2026-01-01';
 
+/** First day the site offered daily puzzles. Archive dates do not go earlier. */
+export const LAUNCH_DATE = '2026-10-31';
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
 export function tokyoDateString(now: Date = new Date()): string {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: TOKYO_TIME_ZONE,
@@ -27,6 +32,34 @@ export function addDays(iso: string, days: number): string {
   const m = String(utc.getUTCMonth() + 1).padStart(2, '0');
   const d = String(utc.getUTCDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+export function isIsoDate(value: string): boolean {
+  if (!ISO_DATE.test(value)) return false;
+  return addDays(value, 0) === value;
+}
+
+/**
+ * A playable archive date. Invalid or future values become today.
+ * Dates before launch clamp to launch.
+ */
+export function clampPuzzleDate(raw: string | null | undefined, today: string, launch = LAUNCH_DATE): string {
+  const safeToday = isIsoDate(today) ? today : launch;
+  if (!raw || !isIsoDate(raw)) return safeToday;
+  if (raw > safeToday) return safeToday;
+  if (raw < launch) return launch;
+  return raw;
+}
+
+/** Today first, back through launch. */
+export function archiveDates(today: string, launch = LAUNCH_DATE): string[] {
+  const end = clampPuzzleDate(today, today, launch);
+  const dates: string[] = [];
+  for (let cursor = end; cursor >= launch; cursor = addDays(cursor, -1)) {
+    dates.push(cursor);
+    if (dates.length > 5000) break;
+  }
+  return dates;
 }
 
 export function daysBetween(fromIso: string, toIso: string): number {
