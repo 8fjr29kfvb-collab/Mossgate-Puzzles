@@ -15,6 +15,14 @@ function chromeBinary(): string {
   throw new Error(`Chrome was not found. Tried ${candidates.join(', ')}`);
 }
 
+export type ChromeSession = {
+  evaluate: (expression: string) => Promise<unknown>;
+  setViewport: (width: number, height: number) => Promise<void>;
+  setHtml: (html: string) => Promise<void>;
+  navigate: (url: string) => Promise<void>;
+  mouse: (type: 'mousePressed' | 'mouseReleased' | 'mouseMoved', x: number, y: number) => Promise<void>;
+};
+
 export async function withChrome(
   run: (
     evaluate: (expression: string) => Promise<unknown>,
@@ -22,6 +30,12 @@ export async function withChrome(
     setHtml: (html: string) => Promise<void>,
   ) => Promise<void>,
 ): Promise<void> {
+  await withChromeSession(async (session) => {
+    await run(session.evaluate, session.setViewport, session.setHtml);
+  });
+}
+
+export async function withChromeSession(run: (session: ChromeSession) => Promise<void>): Promise<void> {
   const binary = chromeBinary();
   const port = 9700 + Math.floor(Math.random() * 400);
   const profile = mkdtempSync(join(tmpdir(), 'layout-chrome-'));
@@ -102,12 +116,27 @@ export async function withChrome(
     const evaluate = async (expression: string) => {
       const result = (await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })) as {
         result?: { value?: unknown };
-        exceptionDetails?: { text?: string };
+        exceptionDetails?: { text?: string; exception?: { description?: string } };
       };
-      if (result.exceptionDetails) throw new Error(result.exceptionDetails.text ?? 'Chrome evaluation failed');
+      if (result.exceptionDetails) {
+        throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text ?? 'Chrome evaluation failed');
+      }
       return result.result?.value;
     };
-    await run(evaluate, setViewport, setHtml);
+    const navigate = async (url: string) => {
+      await send('Page.navigate', { url });
+    };
+    const mouse = async (type: 'mousePressed' | 'mouseReleased' | 'mouseMoved', x: number, y: number) => {
+      await send('Input.dispatchMouseEvent', {
+        type,
+        x,
+        y,
+        button: 'left',
+        buttons: type === 'mouseReleased' ? 0 : 1,
+        clickCount: 1,
+      });
+    };
+    await run({ evaluate, setViewport, setHtml, navigate, mouse });
     ws.close();
   } finally {
     chrome.kill();

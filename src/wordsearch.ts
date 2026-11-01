@@ -5,7 +5,7 @@ import { WORD_THEMES, type WordTheme } from './words.ts';
 /**
  * Grid size depends only on the Tokyo date, never on the screen.
  * Weekdays are 20×20 with 22 words. Sundays are a 25×25 challenge with 32 words.
- * Phones scroll the grid instead of receiving a smaller puzzle.
+ * The board scales to the width of the screen. Zoom can enlarge it.
  *
  * Words read across (left to right), down, or diagonally down-right.
  * They are never placed backwards.

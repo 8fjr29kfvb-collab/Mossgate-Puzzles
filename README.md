@@ -58,7 +58,7 @@ Previous day and Next day step through the archive. The Archive list runs from t
 
 ### Word search
 
-The seed is FNV-1a of `mossgate-words-v1:YYYY-MM-DD`, expanded with mulberry32. Weekdays are a 20×20 grid with 22 words. Sundays in Tokyo are a 25×25 grid with 32 words. The size follows the date only, so a phone and a desktop get the same puzzle. A narrow screen scrolls the grid, including in large print. Words read across, down, or diagonally down-right, never backwards. If the random letters would spell a blocklisted word, or a placed word would appear twice, the generator retries with `mossgate-words-v1:YYYY-MM-DD#n`. Themes and word lists are hand-written in `src/words.ts`.
+The seed is FNV-1a of `mossgate-words-v1:YYYY-MM-DD`, expanded with mulberry32. Weekdays are a 20×20 grid with 22 words. Sundays in Tokyo are a 25×25 grid with 32 words. The size follows the date only, so a phone and a desktop get the same puzzle. The grid scales to the width of the screen, including in large print, and Zoom and Pan adjust the view. Words read across, down, or diagonally down-right, never backwards. If the random letters would spell a blocklisted word, or a placed word would appear twice, the generator retries with `mossgate-words-v1:YYYY-MM-DD#n`. Themes and word lists are hand-written in `src/words.ts`.
 
 The save key is `mossgate-puzzles-v1`. The document version is 2: a map of date to that day’s progress, capped at 60 dates. A version 1 save, which stored only the latest day, is read into that day’s slot so it is not dropped.
 

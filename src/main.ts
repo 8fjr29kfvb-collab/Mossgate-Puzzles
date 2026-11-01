@@ -20,7 +20,7 @@ import {
   type SudokuProgress,
   type WordSearchProgress,
 } from './storage.ts';
-import { wordsearchBoardHtml } from './wordsearch-board.ts';
+import { wordsearchBoardHtml, wordsearchCellClass } from './wordsearch-board.ts';
 import { selectionIndexes, wordsearchForDate, type WordSearchPuzzle } from './wordsearch.ts';
 import { clueCount, sudokuBand, sudokuForDate, type SudokuPuzzle } from './sudoku.ts';
 
@@ -45,7 +45,8 @@ const SUDOKU_HELP = `
 const WORDSEARCH_HELP = `
   <p>Find every word in the list. Words read across, down, or diagonally down to the right. They are never written backwards.</p>
   <ul>
-    <li>Tap the first letter, then the last letter. On a phone, scroll the grid if it does not fit.</li>
+    <li>Tap the first letter, then the last letter, or drag from the first letter to the last.</li>
+    <li>Zoom in enlarges the grid. Pan moves the grid without selecting a word. Fit shows the whole grid.</li>
     <li>Arrow keys move. <kbd>Enter</kbd> sets the first letter, then the last. <kbd>Escape</kbd> clears the start.</li>
     <li>Sunday in Tokyo is a larger grid with more words. The grid for a date is the same on every screen.</li>
   </ul>
@@ -97,6 +98,116 @@ const runtime: Record<Mode, Runtime> = {
 };
 
 let drag: { id: number; value: CellValue; changes: NonogramChange[]; seen: Set<number> } | null = null;
+
+const WORD_ZOOMS = [1, 1.35, 1.85, 2.5, 3.4];
+let wordZoomIndex = 0;
+let wordPanX = 0;
+let wordPanY = 0;
+let wordPanMode = false;
+let wordPanDrag: { id: number; x: number; y: number; panX: number; panY: number; minX: number; minY: number; grid: HTMLElement } | null = null;
+let wordGesture: { id: number; start: number; x: number; y: number; dragged: boolean; toggle: boolean } | null = null;
+let wordsearchResize: ResizeObserver | null = null;
+let wordsearchObserved: Element | null = null;
+
+function resetWordsearchView(): void {
+  wordZoomIndex = 0;
+  wordPanX = 0;
+  wordPanY = 0;
+  wordPanMode = false;
+  wordPanDrag = null;
+  wordGesture = null;
+}
+
+function applyWordsearchView(): void {
+  const viewport = document.querySelector<HTMLElement>('#board-wrap .wordsearch-viewport');
+  const grid = document.querySelector<HTMLElement>('#board-wrap .wordsearch');
+  if (!viewport || !grid) return;
+  const zoom = WORD_ZOOMS[wordZoomIndex] ?? 1;
+  if (zoom === 1) {
+    wordPanX = 0;
+    wordPanY = 0;
+  } else if (viewport.clientWidth >= 8 && viewport.clientHeight >= 8) {
+    const minX = Math.ceil(viewport.clientWidth * (1 - zoom));
+    const minY = Math.ceil(viewport.clientHeight * (1 - zoom));
+    wordPanX = Math.min(0, Math.max(minX, Math.round(wordPanX)));
+    wordPanY = Math.min(0, Math.max(minY, Math.round(wordPanY)));
+  }
+  grid.style.setProperty('--zoom', String(zoom));
+  grid.style.setProperty('--pan-x', `${wordPanX}px`);
+  grid.style.setProperty('--pan-y', `${wordPanY}px`);
+  viewport.classList.toggle('is-pan', wordPanMode);
+  viewport.classList.toggle('is-panning', wordPanDrag != null);
+  const fit = document.getElementById('wordsearch-fit');
+  if (fit) fit.setAttribute('aria-pressed', String(zoom === 1));
+  const pan = document.getElementById('wordsearch-pan');
+  if (pan) {
+    pan.setAttribute('aria-pressed', String(wordPanMode));
+    pan.textContent = wordPanMode ? 'Pan on' : 'Pan';
+    pan.setAttribute('aria-label', wordPanMode ? 'Pan on. Drag to move the grid' : 'Pan. Drag to move the grid');
+  }
+  const zoomOut = document.getElementById('wordsearch-zoom-out');
+  if (zoomOut instanceof HTMLButtonElement) zoomOut.disabled = wordZoomIndex <= 0;
+  const zoomIn = document.getElementById('wordsearch-zoom-in');
+  if (zoomIn instanceof HTMLButtonElement) zoomIn.disabled = wordZoomIndex >= WORD_ZOOMS.length - 1;
+  if (wordsearchObserved !== viewport) {
+    wordsearchResize ??= new ResizeObserver(() => {
+      applyWordsearchView();
+    });
+    if (wordsearchObserved) wordsearchResize.unobserve(wordsearchObserved);
+    wordsearchResize.observe(viewport);
+    wordsearchObserved = viewport;
+  }
+}
+
+function stepWordZoom(direction: 1 | -1): void {
+  const next = wordZoomIndex + direction;
+  if (next < 0 || next >= WORD_ZOOMS.length) return;
+  const viewport = document.querySelector<HTMLElement>('#board-wrap .wordsearch-viewport');
+  const prev = WORD_ZOOMS[wordZoomIndex] ?? 1;
+  const zoom = WORD_ZOOMS[next] ?? 1;
+  if (viewport && prev > 0) {
+    const cx = viewport.clientWidth / 2;
+    const cy = viewport.clientHeight / 2;
+    const gx = (cx - wordPanX) / prev;
+    const gy = (cy - wordPanY) / prev;
+    wordPanX = cx - gx * zoom;
+    wordPanY = cy - gy * zoom;
+  }
+  wordZoomIndex = next;
+  if (zoom === 1) {
+    wordPanX = 0;
+    wordPanY = 0;
+  }
+  applyWordsearchView();
+}
+
+function fitWordsearch(): void {
+  wordZoomIndex = 0;
+  wordPanX = 0;
+  wordPanY = 0;
+  applyWordsearchView();
+}
+
+function toggleWordsearchPan(): void {
+  wordPanMode = !wordPanMode;
+  applyWordsearchView();
+  announce(wordPanMode ? 'Pan on. Drag the grid to move it.' : 'Pan off. Drag letters to select a word.');
+}
+
+function paintWordsearchSelection(): void {
+  const wrap = document.getElementById('board-wrap');
+  if (!wrap) return;
+  const anchor = state.wordsearchAnchor;
+  const selected = state.wordsearchSelected;
+  wrap.querySelectorAll<HTMLButtonElement>('button.letter').forEach((button) => {
+    const index = Number(button.dataset.i);
+    const found = button.classList.contains('found');
+    button.className = wordsearchCellClass(found, anchor === index, selected === index);
+    button.setAttribute('aria-pressed', String(anchor === index));
+    button.setAttribute('aria-selected', String(selected === index));
+    button.tabIndex = selected === index ? 0 : -1;
+  });
+}
 
 function must<T extends HTMLElement>(id: string): T {
   const el = document.getElementById(id);
@@ -573,22 +684,15 @@ function renderWordsearchBoard(): void {
     return;
   }
   wrap.innerHTML = wordsearchBoardHtml(puzzle, state.wordsearch.found, state.wordsearchAnchor, state.wordsearchSelected);
+  applyWordsearchView();
 }
 
 function refreshWordsearchSurface(): void {
   const puzzle = state.wordsearchPuzzle;
   if (!puzzle) return;
-  const html = wordsearchBoardHtml(puzzle, state.wordsearch.found, state.wordsearchAnchor, state.wordsearchSelected);
   const wrap = must('board-wrap');
-  const scroller = wrap.querySelector('.wordsearch-scroll');
-  const scrollLeft = scroller?.scrollLeft ?? 0;
-  const scrollTop = scroller?.scrollTop ?? 0;
-  wrap.innerHTML = html;
-  const next = wrap.querySelector('.wordsearch-scroll');
-  if (next) {
-    next.scrollLeft = scrollLeft;
-    next.scrollTop = scrollTop;
-  }
+  wrap.innerHTML = wordsearchBoardHtml(puzzle, state.wordsearch.found, state.wordsearchAnchor, state.wordsearchSelected);
+  applyWordsearchView();
   renderPad();
 }
 
@@ -837,15 +941,96 @@ function onWordsearchPick(index: number): void {
   }
 }
 
-function onPointerDown(event: PointerEvent): void {
+function onWordsearchPointerDown(event: PointerEvent): void {
+  if (event.button !== 0) return;
+  const viewport = document.querySelector<HTMLElement>('#board-wrap .wordsearch-viewport');
+  if (wordPanMode && viewport && event.target instanceof Node && viewport.contains(event.target)) {
+    event.preventDefault();
+    try {
+      viewport.setPointerCapture(event.pointerId);
+    } catch {
+      // Synthetic events and a pointer that ends early cannot be captured.
+    }
+    const grid = viewport.querySelector<HTMLElement>('.wordsearch');
+    if (!grid) return;
+    const zoom = WORD_ZOOMS[wordZoomIndex] ?? 1;
+    wordPanDrag = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      panX: wordPanX,
+      panY: wordPanY,
+      minX: zoom === 1 ? 0 : Math.ceil(viewport.clientWidth * (1 - zoom)),
+      minY: zoom === 1 ? 0 : Math.ceil(viewport.clientHeight * (1 - zoom)),
+      grid,
+    };
+    viewport.classList.add('is-panning');
+    return;
+  }
   const button = buttonFromTarget(event.target);
   if (!button) return;
+  event.preventDefault();
   const index = Number(button.dataset.i);
-  if (state.mode === 'wordsearch') {
-    event.preventDefault();
+  if (state.wordsearchAnchor != null && state.wordsearchAnchor !== index) {
+    wordGesture = null;
     onWordsearchPick(index);
     return;
   }
+  try {
+    must('board-wrap').setPointerCapture(event.pointerId);
+  } catch {
+    // Synthetic events and a pointer that ends early cannot be captured.
+  }
+  wordGesture = {
+    id: event.pointerId,
+    start: index,
+    x: event.clientX,
+    y: event.clientY,
+    dragged: false,
+    toggle: state.wordsearchAnchor === index,
+  };
+  if (state.wordsearchAnchor == null) {
+    state.wordsearchSelected = index;
+    state.wordsearchAnchor = index;
+    paintWordsearchSelection();
+  }
+}
+
+function endWordPan(event: PointerEvent): boolean {
+  if (!wordPanDrag || event.pointerId !== wordPanDrag.id) return false;
+  wordPanDrag = null;
+  document.querySelector('.wordsearch-viewport')?.classList.remove('is-panning');
+  return true;
+}
+
+function endWordGesture(event: PointerEvent): boolean {
+  if (!wordGesture || event.pointerId !== wordGesture.id) return false;
+  const gesture = wordGesture;
+  wordGesture = null;
+  const endButton = buttonFromTarget(document.elementFromPoint(event.clientX, event.clientY));
+  const end = endButton ? Number(endButton.dataset.i) : null;
+  if (gesture.dragged && end != null && end !== gesture.start) {
+    state.wordsearchAnchor = gesture.start;
+    state.wordsearchSelected = gesture.start;
+    onWordsearchPick(end);
+    return true;
+  }
+  if (gesture.toggle && !gesture.dragged) {
+    onWordsearchPick(gesture.start);
+    return true;
+  }
+  refreshWordsearchSurface();
+  return true;
+}
+
+function onPointerDown(event: PointerEvent): void {
+  if (state.mode === 'wordsearch') {
+    onWordsearchPointerDown(event);
+    return;
+  }
+  const button = buttonFromTarget(event.target);
+  if (!button) return;
+  const index = Number(button.dataset.i);
   if (state.mode === 'sudoku') {
     if (!state.sudokuPuzzle) return;
     state.sudokuSelected = index;
@@ -876,10 +1061,39 @@ function onPointerDown(event: PointerEvent): void {
 }
 
 function onPointerMove(event: PointerEvent): void {
+  if (wordPanDrag && event.pointerId === wordPanDrag.id) {
+    event.preventDefault();
+    wordPanX = Math.min(0, Math.max(wordPanDrag.minX, Math.round(wordPanDrag.panX + event.clientX - wordPanDrag.x)));
+    wordPanY = Math.min(0, Math.max(wordPanDrag.minY, Math.round(wordPanDrag.panY + event.clientY - wordPanDrag.y)));
+    wordPanDrag.grid.style.setProperty('--pan-x', `${wordPanX}px`);
+    wordPanDrag.grid.style.setProperty('--pan-y', `${wordPanY}px`);
+    return;
+  }
+  if (wordGesture && event.pointerId === wordGesture.id) {
+    const dx = event.clientX - wordGesture.x;
+    const dy = event.clientY - wordGesture.y;
+    if (dx * dx + dy * dy > 64) wordGesture.dragged = true;
+    return;
+  }
   if (!drag || event.pointerId !== drag.id || state.mode !== 'nonogram') return;
   const button = buttonFromTarget(document.elementFromPoint(event.clientX, event.clientY));
   if (!button) return;
   paintNonogram(Number(button.dataset.i), drag.value);
+}
+
+function onPointerUp(event: PointerEvent): void {
+  if (endWordPan(event)) return;
+  if (endWordGesture(event)) return;
+  commitStroke();
+}
+
+function onPointerCancel(event: PointerEvent): void {
+  if (wordPanDrag && event.pointerId === wordPanDrag.id) {
+    wordPanDrag = null;
+    document.querySelector('.wordsearch-viewport')?.classList.remove('is-panning');
+  }
+  if (wordGesture && event.pointerId === wordGesture.id) wordGesture = null;
+  commitStroke();
 }
 
 function moveSelection(rowDelta: number, colDelta: number): void {
@@ -1014,6 +1228,10 @@ function selectMode(mode: Mode): void {
 
 function applyMode(mode: Mode): void {
   if (mode === state.mode) return;
+  if (state.mode === 'wordsearch') {
+    wordPanDrag = null;
+    wordGesture = null;
+  }
   syncClock(state.mode);
   state.mode = mode;
   syncClock(mode);
@@ -1090,6 +1308,7 @@ function loadDayProgress(date: string): void {
   state.wordsearchUndo = [];
   state.wordsearchAnchor = null;
   drag = null;
+  resetWordsearchView();
   runtime.sudoku.runningSince = null;
   runtime.nonogram.runningSince = null;
   runtime.wordsearch.runningSince = null;
@@ -1326,13 +1545,19 @@ function boot(): void {
   const board = must('board-wrap');
   board.addEventListener('pointerdown', onPointerDown);
   board.addEventListener('pointermove', onPointerMove);
-  board.addEventListener('pointerup', () => commitStroke());
-  board.addEventListener('pointercancel', () => commitStroke());
+  board.addEventListener('pointerup', onPointerUp);
+  board.addEventListener('pointercancel', onPointerCancel);
   board.addEventListener('contextmenu', (event) => {
     if (state.mode === 'nonogram') event.preventDefault();
   });
   board.addEventListener('click', (event) => {
-    if (event.target instanceof HTMLElement && event.target.id === 'reload') location.reload();
+    const button = event.target instanceof Element ? event.target.closest('button') : null;
+    if (!(button instanceof HTMLButtonElement)) return;
+    if (button.id === 'reload') location.reload();
+    else if (button.id === 'wordsearch-zoom-in') stepWordZoom(1);
+    else if (button.id === 'wordsearch-zoom-out') stepWordZoom(-1);
+    else if (button.id === 'wordsearch-fit') fitWordsearch();
+    else if (button.id === 'wordsearch-pan') toggleWordsearchPan();
   });
 
   must('pad').addEventListener('click', (event) => {
